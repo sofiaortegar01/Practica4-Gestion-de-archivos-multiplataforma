@@ -1,9 +1,10 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 import 'package:xml/xml.dart';
 
 void main() {
@@ -19,18 +20,30 @@ class GestorArchivosApp extends StatefulWidget {
 }
 
 class _GestorArchivosAppState extends State<GestorArchivosApp> {
-  // CONFIGURACIÓN DE TEMAS
+  // TEMAS
   bool temaGuinda = true;
   bool modoOscuro = false;
 
-  // DATOS DEL ARCHIVO
+  // INFORMACIÓN DEL ARCHIVO
   String? nombreArchivo;
   int? tamanoArchivo;
   String? extensionArchivo;
   String? contenidoArchivo;
   String? mensajeArchivo;
 
-  // SELECCIONAR Y LEER ARCHIVOS
+  // VISOR DE IMÁGENES
+  Uint8List? imagenBytes;
+  int rotacionImagen = 0;
+  final TransformationController controladorZoom =
+  TransformationController();
+
+  @override
+  void dispose() {
+    controladorZoom.dispose();
+    super.dispose();
+  }
+
+  // SELECCIONAR ARCHIVO
   Future<void> seleccionarArchivo() async {
     try {
       final resultado = await FilePicker.platform.pickFiles(
@@ -46,54 +59,69 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
 
       String? contenido;
       String? mensaje;
+      Uint8List? imagen;
 
-      const formatosPermitidos = {
+      const formatosTexto = {
         'txt',
         'md',
         'json',
         'xml',
       };
 
-      if (formatosPermitidos.contains(extension)) {
-        if (archivo.path == null) {
-          mensaje = 'No se pudo acceder al archivo.';
-        } else {
-          try {
-            // Leer bytes del documento
-            final bytes =
-            await File(archivo.path!).readAsBytes();
+      const formatosImagen = {
+        'jpg',
+        'jpeg',
+        'png',
+      };
 
-            // Convertir a texto UTF-8
+      if (archivo.path == null) {
+        mensaje = 'No se pudo acceder al archivo seleccionado.';
+      } else if (formatosTexto.contains(extension)) {
+        try {
+          // Evitar cargar documentos demasiado grandes
+          if (archivo.size > 5 * 1024 * 1024) {
+            mensaje = 'El archivo de texto supera el límite '
+                'de vista previa de 5 MB.';
+          } else {
+            final bytes = await File(archivo.path!).readAsBytes();
+
             final texto = const Utf8Decoder(
               allowMalformed: false,
             ).convert(bytes);
 
             if (extension == 'json') {
-              // Validar y dar formato al JSON
               final datos = jsonDecode(texto);
-
               contenido = const JsonEncoder.withIndent(
                 '  ',
               ).convert(datos);
             } else if (extension == 'xml') {
-              // Validar y dar formato al XML
               final documento = XmlDocument.parse(texto);
-
               contenido = documento.toXmlString(
                 pretty: true,
                 indent: '  ',
               );
             } else {
-              // TXT y Markdown
               contenido = texto;
             }
-          } on FormatException catch (e) {
-            mensaje = 'Error de formato: ${e.message}';
-          } on XmlParserException catch (e) {
-            mensaje = 'XML inválido: $e';
-          } on FileSystemException {
-            mensaje = 'No se pudo leer el archivo.';
           }
+        } on FormatException catch (e) {
+          mensaje = 'Formato de texto inválido: ${e.message}';
+        } on XmlParserException catch (e) {
+          mensaje = 'XML inválido: $e';
+        } on FileSystemException {
+          mensaje = 'No se pudo leer el archivo.';
+        }
+      } else if (formatosImagen.contains(extension)) {
+        try {
+          // Límite para evitar problemas de memoria
+          if (archivo.size > 15 * 1024 * 1024) {
+            mensaje = 'La imagen supera el límite '
+                'de vista previa de 15 MB.';
+          } else {
+            imagen = await File(archivo.path!).readAsBytes();
+          }
+        } on FileSystemException {
+          mensaje = 'No se pudo leer la imagen.';
         }
       } else {
         mensaje = 'Este formato todavía no tiene '
@@ -102,12 +130,18 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
 
       if (!mounted) return;
 
+      controladorZoom.value = Matrix4.identity();
+
       setState(() {
         nombreArchivo = archivo.name;
         tamanoArchivo = archivo.size;
         extensionArchivo = extension;
+
         contenidoArchivo = contenido;
         mensajeArchivo = mensaje;
+
+        imagenBytes = imagen;
+        rotacionImagen = 0;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -130,7 +164,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
     }
   }
 
-  // RESALTADO DE SINTAXIS PARA JSON
+  // RESALTADO DE SINTAXIS JSON
   TextSpan resaltarJson(
       String texto,
       Color colorNormal,
@@ -156,18 +190,17 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
       }
 
       final valor = match.group(0)!;
-
       Color color;
 
       if (valor.startsWith('"')) {
         final resto = texto.substring(match.end);
         color = resto.trimLeft().startsWith(':')
-            ? Colors.blue
+            ? Colors.lightBlueAccent
             : Colors.green;
       } else if (valor == 'true' ||
           valor == 'false' ||
           valor == 'null') {
-        color = Colors.purple;
+        color = Colors.purpleAccent;
       } else {
         color = Colors.orange;
       }
@@ -194,7 +227,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
     return TextSpan(children: spans);
   }
 
-  // RESALTADO BÁSICO DE ETIQUETAS XML
+  // RESALTADO DE SINTAXIS XML
   TextSpan resaltarXml(
       String texto,
       Color colorNormal,
@@ -221,7 +254,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
         TextSpan(
           text: match.group(0),
           style: const TextStyle(
-            color: Colors.blue,
+            color: Colors.lightBlueAccent,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -242,17 +275,25 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
     return TextSpan(children: spans);
   }
 
+  // GIRAR IMAGEN 90 GRADOS
+  void girarImagen() {
+    controladorZoom.value = Matrix4.identity();
+
+    setState(() {
+      rotacionImagen = (rotacionImagen + 1) % 4;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final Color colorPrincipal = temaGuinda
         ? const Color(0xFF800020)
-        : const Color(0xFF1565C0);
+        : const Color(0xFF0D59B3);
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Gestor de Archivos',
 
-      // MODO CLARO U OSCURO
       themeMode:
       modoOscuro ? ThemeMode.dark : ThemeMode.light,
 
@@ -279,7 +320,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
           title: const Text('Gestor de Archivos'),
 
           actions: [
-            // BOTÓN SOL / LUNA
+            // SOL Y LUNA
             IconButton(
               icon: Icon(
                 modoOscuro
@@ -296,7 +337,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
               },
             ),
 
-            // BOTÓN DE COLORES IPN / ESCOM
+            // COLOR IPN / ESCOM
             IconButton(
               icon: const Icon(Icons.palette),
               tooltip: 'Cambiar color del tema',
@@ -328,7 +369,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
 
             const SizedBox(height: 24),
 
-            // MIS ARCHIVOS
+            // SELECCIONAR ARCHIVOS
             Card(
               child: ListTile(
                 leading: const Icon(Icons.folder),
@@ -342,7 +383,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
               ),
             ),
 
-            // INFORMACIÓN DEL ARCHIVO
+            // METADATOS
             if (nombreArchivo != null)
               Card(
                 child: Padding(
@@ -370,7 +411,6 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                       const SizedBox(height: 12),
 
                       Text('Nombre: $nombreArchivo'),
-
                       const SizedBox(height: 6),
 
                       Text(
@@ -387,7 +427,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                 ),
               ),
 
-            // CONTENIDO DEL ARCHIVO
+            // VISTA PREVIA DE TEXTO
             if (contenidoArchivo != null)
               Card(
                 child: Padding(
@@ -414,7 +454,6 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
 
                       const SizedBox(height: 12),
 
-                      // Vista previa con colores
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
@@ -463,7 +502,106 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                 ),
               ),
 
-            // MENSAJES DE ERROR O FORMATO NO SOPORTADO
+            // VISOR DE IMÁGENES
+            if (imagenBytes != null)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.image),
+                          const SizedBox(width: 8),
+
+                          const Expanded(
+                            child: Text(
+                              'Vista previa de imagen',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+
+                          IconButton(
+                            icon: const Icon(Icons.rotate_right),
+                            tooltip: 'Girar 90°',
+                            onPressed: girarImagen,
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      Container(
+                        height: 320,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          borderRadius:
+                          BorderRadius.circular(12),
+                        ),
+
+                        clipBehavior: Clip.antiAlias,
+
+                        child: InteractiveViewer(
+                          transformationController:
+                          controladorZoom,
+                          minScale: 0.5,
+                          maxScale: 5.0,
+
+                          child: Center(
+                            child: RotatedBox(
+                              quarterTurns: rotacionImagen,
+                              child: Image.memory(
+                                imagenBytes!,
+                                fit: BoxFit.contain,
+                                errorBuilder: (
+                                    context,
+                                    error,
+                                    stackTrace,
+                                    ) {
+                                  return const Center(
+                                    child: Text(
+                                      'No se pudo mostrar la imagen.',
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      const Text(
+                        'Usa dos dedos para ampliar o mover '
+                            'la imagen.',
+                        textAlign: TextAlign.center,
+                      ),
+
+                      TextButton.icon(
+                        onPressed: () {
+                          controladorZoom.value =
+                              Matrix4.identity();
+
+                          setState(() {
+                            rotacionImagen = 0;
+                          });
+                        },
+                        icon: const Icon(Icons.restart_alt),
+                        label: const Text('Restablecer vista'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // MENSAJES
             if (mensajeArchivo != null)
               Card(
                 child: Padding(
