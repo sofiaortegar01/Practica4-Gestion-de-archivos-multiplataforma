@@ -64,6 +64,9 @@ class GestorArchivosApp extends StatefulWidget {
 }
 
 class _GestorArchivosAppState extends State<GestorArchivosApp> {
+
+  final GlobalKey<NavigatorState> navigatorKey =
+  GlobalKey<NavigatorState>();
   // TEMAS
   bool temaGuinda = true;
   bool modoOscuro = false;
@@ -100,9 +103,11 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
 
   // MENSAJES
   void mostrarMensaje(String mensaje) {
-    if (!mounted) return;
+    final contexto = navigatorKey.currentContext;
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    if (contexto == null || !contexto.mounted) return;
+
+    ScaffoldMessenger.of(contexto).showSnackBar(
       SnackBar(content: Text(mensaje)),
     );
   }
@@ -217,6 +222,118 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
       rutaPrivada: rutaDestino,
       fecha: DateTime.now().toIso8601String(),
     );
+  }
+
+  Future<void> duplicarArchivo(ArchivoGuardado archivo) async {
+    try {
+      final original = File(archivo.rutaPrivada);
+
+      if (!await original.exists()) {
+        mostrarMensaje('El archivo original ya no existe.');
+        return;
+      }
+
+      final id = DateTime.now().microsecondsSinceEpoch.toString();
+
+      final nombreOriginal = archivo.nombre;
+      final punto = nombreOriginal.lastIndexOf('.');
+
+      final nombreBase = punto > 0
+          ? nombreOriginal.substring(0, punto)
+          : nombreOriginal;
+
+      final extension = archivo.extension;
+
+      final nuevoNombre =
+          '${nombreBase}_copia${extension.isEmpty ? "" : ".$extension"}';
+
+      final directorio = original.parent;
+
+      final nuevaRuta =
+          '${directorio.path}${Platform.pathSeparator}$id'
+          '${extension.isEmpty ? "" : ".$extension"}';
+
+      final copia = await original.copy(nuevaRuta);
+
+      final nuevoArchivo = ArchivoGuardado(
+        id: id,
+        nombre: nuevoNombre,
+        extension: extension,
+        tamano: await copia.length(),
+        rutaPrivada: nuevaRuta,
+        fecha: DateTime.now().toIso8601String(),
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        recientes.insert(0, nuevoArchivo);
+      });
+
+      await guardarDatos();
+
+      mostrarMensaje('Archivo copiado correctamente.');
+    } catch (e) {
+      mostrarMensaje('Error al copiar el archivo: $e');
+    }
+  }
+
+
+  Future<void> eliminarArchivo(
+      ArchivoGuardado archivo,
+      BuildContext contextoNavegacion,
+      ) async {
+    final confirmar = await showDialog<bool>(
+      context: contextoNavegacion,
+      builder: (contextoDialogo) => AlertDialog(
+        title: const Text('Eliminar archivo'),
+        content: Text(
+          '¿Estás segura de eliminar "${archivo.nombre}"?\n\n'
+              'Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                Navigator.pop(contextoDialogo, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(contextoDialogo, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmar != true) return;
+
+    try {
+      final archivoFisico = File(archivo.rutaPrivada);
+
+      if (await archivoFisico.exists()) {
+        await archivoFisico.delete();
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        recientes.removeWhere((a) => a.id == archivo.id);
+        favoritos.removeWhere((a) => a.id == archivo.id);
+
+        if (archivoActual?.id == archivo.id) {
+          archivoActual = null;
+          contenidoArchivo = '';
+          imagenBytes = null;
+        }
+      });
+
+      await guardarDatos();
+
+      mostrarMensaje('Archivo eliminado correctamente.');
+    } catch (e) {
+      mostrarMensaje('No se pudo eliminar el archivo: $e');
+    }
   }
 
   // SELECCIONAR DOCUMENTO
@@ -345,6 +462,152 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
     );
   }
 
+
+
+  // RENOMBRAR ARCHIVO PRIVADO
+  Future<void> renombrarArchivo(
+      ArchivoGuardado archivo,
+      BuildContext contextoNavegacion,
+      ) async {
+    final controlador = TextEditingController(
+      text: archivo.nombre,
+    );
+
+    final nuevoNombre = await showDialog<String>(
+      context: contextoNavegacion,
+      builder: (contexto) {
+        return AlertDialog(
+          title: const Text('Renombrar archivo'),
+          content: TextField(
+            controller: controlador,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Nuevo nombre',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(contexto),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(
+                  contexto,
+                  controlador.text.trim(),
+                );
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        );
+      },
+    );
+
+    //controlador.dispose();
+
+    if (nuevoNombre == null) return;
+
+    if (nuevoNombre.isEmpty ||
+        nuevoNombre == '.' ||
+        nuevoNombre == '..' ||
+        nuevoNombre.contains('/') ||
+        nuevoNombre.contains('\\') ||
+        nuevoNombre.contains(':')) {
+      mostrarMensaje('Nombre de archivo no válido.');
+      return;
+    }
+
+    // Conservar la extensión original.
+    final extension = archivo.extension;
+    final sufijo = extension.isEmpty ? '' : '.$extension';
+
+    String nombreFinal = nuevoNombre;
+
+    if (sufijo.isNotEmpty &&
+        !nombreFinal.toLowerCase().endsWith(sufijo)) {
+      nombreFinal += sufijo;
+    }
+
+    // Evitar cambios accidentales de extensión.
+    if (sufijo.isNotEmpty) {
+      final base = nombreFinal.substring(
+        0,
+        nombreFinal.length - sufijo.length,
+      );
+
+      if (base.isEmpty || base.contains('.')) {
+        mostrarMensaje(
+          'Escribe un nombre sin otra extensión.',
+        );
+        return;
+      }
+    }
+
+    try {
+      final archivoOriginal = File(archivo.rutaPrivada);
+
+      if (!await archivoOriginal.exists()) {
+        mostrarMensaje('El archivo ya no existe.');
+        return;
+      }
+
+      final separador = Platform.pathSeparator;
+      final carpeta = archivoOriginal.parent.path;
+
+      // El ID evita conflictos entre archivos con
+      // nombres iguales.
+      final nombreFisico =
+          '${archivo.id}_$nombreFinal';
+
+      final nuevaRuta =
+          '$carpeta$separador$nombreFisico';
+
+      if (nuevaRuta != archivo.rutaPrivada) {
+        if (await File(nuevaRuta).exists()) {
+          mostrarMensaje('Ya existe un archivo con ese nombre.');
+          return;
+        }
+
+        await archivoOriginal.rename(nuevaRuta);
+      }
+
+      final actualizado = ArchivoGuardado(
+        id: archivo.id,
+        nombre: nombreFinal,
+        extension: archivo.extension,
+        tamano: archivo.tamano,
+        rutaPrivada: nuevaRuta,
+        fecha: archivo.fecha,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        recientes = recientes.map((a) {
+          return a.id == archivo.id ? actualizado : a;
+        }).toList();
+
+        favoritos = favoritos.map((a) {
+          return a.id == archivo.id ? actualizado : a;
+        }).toList();
+
+        if (archivoActual?.id == archivo.id) {
+          archivoActual = actualizado;
+        }
+      });
+
+      await guardarDatos();
+
+      mostrarMensaje(
+        'Archivo renombrado correctamente.',
+      );
+    } catch (e) {
+      mostrarMensaje('No se pudo renombrar: $e');
+    }
+  }
+
   // QUITAR DE RECIENTES
   Future<void> quitarReciente(ArchivoGuardado archivo) async {
     setState(() {
@@ -356,6 +619,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
 
 
   // VER ARCHIVOS RECIENTES Y FAVORITOS
+
   void mostrarLista({
     required BuildContext contextoNavegacion,
     required String titulo,
@@ -382,7 +646,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                     : ListView.builder(
                   padding: const EdgeInsets.all(12),
                   itemCount: lista.length,
-                  itemBuilder: (contexto, indice) {
+                  itemBuilder: (contextoItem, indice) {
                     final archivo = lista[indice];
 
                     return Card(
@@ -394,29 +658,112 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                         subtitle: Text(
                           '${archivo.tamano} bytes',
                         ),
-                        trailing: IconButton(
-                          icon: Icon(
-                            mostrarFavoritos
-                                ? Icons.star
-                                : Icons.close,
-                            color: mostrarFavoritos
-                                ? Colors.amber
-                                : null,
+
+                        // MENÚ DE OPCIONES
+                        trailing: PopupMenuButton<String>(
+                          tooltip: 'Opciones del archivo',
+                          icon: const Icon(
+                            Icons.more_vert,
                           ),
-                          onPressed: () async {
-                            if (mostrarFavoritos) {
-                              await alternarFavorito(archivo);
-                            } else {
-                              await quitarReciente(archivo);
+
+                          onSelected: (opcion) async {
+                            if (opcion == 'renombrar') {
+                              await renombrarArchivo(
+                                archivo,
+                                contextoPantalla,
+                              );
+
+                            } else if (opcion == 'copiar') {
+                              await duplicarArchivo(
+                                archivo,
+                              );
+
+                            } else if (opcion == 'eliminar') {
+                              await eliminarArchivo(
+                                archivo,
+                                contextoPantalla,
+                              );
+
+                            } else if (opcion == 'quitar') {
+                              if (mostrarFavoritos) {
+                                await alternarFavorito(
+                                  archivo,
+                                );
+                              } else {
+                                await quitarReciente(
+                                  archivo,
+                                );
+                              }
                             }
 
+                            // ACTUALIZAR LA LISTA
                             if (contexto.mounted) {
                               actualizarPantalla(() {});
                             }
                           },
+
+                          itemBuilder: (contextoMenu) => [
+                            const PopupMenuItem<String>(
+                              value: 'renombrar',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.edit),
+                                  SizedBox(width: 12),
+                                  Text('Renombrar'),
+                                ],
+                              ),
+                            ),
+
+                            const PopupMenuItem<String>(
+                              value: 'copiar',
+                              child: Row(
+                                children: [
+                                  Icon(Icons.copy),
+                                  SizedBox(width: 12),
+                                  Text('Copiar'),
+                                ],
+                              ),
+                            ),
+
+                            const PopupMenuItem<String>(
+                              value: 'eliminar',
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.delete_outline,
+                                    color: Colors.red,
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Eliminar'),
+                                ],
+                              ),
+                            ),
+
+                            PopupMenuItem<String>(
+                              value: 'quitar',
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.remove_circle_outline,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    mostrarFavoritos
+                                        ? 'Quitar de favoritos'
+                                        : 'Quitar de recientes',
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
+
+                        // ABRIR ARCHIVO
                         onTap: () async {
-                          Navigator.of(contextoPantalla).pop();
+                          Navigator.of(
+                            contextoPantalla,
+                          ).pop();
+
                           await abrirArchivo(archivo);
                         },
                       ),
@@ -573,6 +920,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
         : const Color(0xFF0D59B3);
 
     return MaterialApp(
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Gestor de Archivos',
 
