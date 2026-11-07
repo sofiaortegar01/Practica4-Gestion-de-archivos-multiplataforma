@@ -290,10 +290,10 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
         mensaje = 'Este formato todavía no tiene '
             'vista previa disponible.';
       }
-    } on FormatException catch (e) {
-      mensaje = 'Formato inválido: ${e.message}';
     } on XmlParserException catch (e) {
       mensaje = 'XML inválido: $e';
+    } on FormatException catch (e) {
+      mensaje = 'Formato inválido: ${e.message}';
     } on FileSystemException {
       mensaje = 'No se pudo abrir el archivo guardado.';
     } catch (e) {
@@ -354,106 +354,80 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
     await guardarDatos();
   }
 
-  // VER LISTAS
+
+  // VER ARCHIVOS RECIENTES Y FAVORITOS
   void mostrarLista({
+    required BuildContext contextoNavegacion,
     required String titulo,
     required bool mostrarFavoritos,
   }) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (contextoHoja) {
-        return StatefulBuilder(
-          builder: (contexto, actualizarHoja) {
-            final lista =
-            mostrarFavoritos ? favoritos : recientes;
+    Navigator.of(contextoNavegacion).push(
+      MaterialPageRoute(
+        builder: (contextoPantalla) {
+          return StatefulBuilder(
+            builder: (contexto, actualizarPantalla) {
+              final lista =
+              mostrarFavoritos ? favoritos : recientes;
 
-            return SafeArea(
-              child: SizedBox(
-                height: MediaQuery.of(contexto).size.height * 0.65,
-                child: Column(
-                  children: [
-                    Text(
-                      titulo,
-                      style: Theme.of(contexto)
-                          .textTheme
-                          .titleLarge,
-                    ),
+              return Scaffold(
+                appBar: AppBar(
+                  title: Text(titulo),
+                ),
+                body: lista.isEmpty
+                    ? const Center(
+                  child: Text(
+                    'Todavía no hay archivos guardados.',
+                  ),
+                )
+                    : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: lista.length,
+                  itemBuilder: (contexto, indice) {
+                    final archivo = lista[indice];
 
-                    const SizedBox(height: 12),
-
-                    Expanded(
-                      child: lista.isEmpty
-                          ? const Center(
-                        child: Text(
-                          'Todavía no hay archivos.',
+                    return Card(
+                      child: ListTile(
+                        leading: Icon(
+                          iconoArchivo(archivo.extension),
                         ),
-                      )
-                          : ListView.builder(
-                        itemCount: lista.length,
-                        itemBuilder: (contexto, indice) {
-                          final archivo = lista[indice];
+                        title: Text(archivo.nombre),
+                        subtitle: Text(
+                          '${archivo.tamano} bytes',
+                        ),
+                        trailing: IconButton(
+                          icon: Icon(
+                            mostrarFavoritos
+                                ? Icons.star
+                                : Icons.close,
+                            color: mostrarFavoritos
+                                ? Colors.amber
+                                : null,
+                          ),
+                          onPressed: () async {
+                            if (mostrarFavoritos) {
+                              await alternarFavorito(archivo);
+                            } else {
+                              await quitarReciente(archivo);
+                            }
 
-                          final marcado = favoritos.any(
-                                (a) => a.id == archivo.id,
-                          );
-
-                          return ListTile(
-                            leading: Icon(
-                              iconoArchivo(
-                                archivo.extension,
-                              ),
-                            ),
-                            title: Text(
-                              archivo.nombre,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              '${archivo.tamano} bytes',
-                            ),
-                            onTap: () async {
-                              Navigator.pop(contextoHoja);
-                              await abrirArchivo(archivo);
-                            },
-                            trailing: IconButton(
-                              icon: Icon(
-                                mostrarFavoritos
-                                    ? Icons.star
-                                    : Icons.close,
-                                color: mostrarFavoritos
-                                    ? Colors.amber
-                                    : null,
-                              ),
-                              tooltip: mostrarFavoritos
-                                  ? 'Quitar favorito'
-                                  : 'Quitar de recientes',
-                              onPressed: () async {
-                                if (mostrarFavoritos) {
-                                  await alternarFavorito(
-                                    archivo,
-                                  );
-                                } else {
-                                  await quitarReciente(
-                                    archivo,
-                                  );
-                                }
-
-                                actualizarHoja(() {});
-                              },
-                            ),
-                          );
+                            if (contexto.mounted) {
+                              actualizarPantalla(() {});
+                            }
+                          },
+                        ),
+                        onTap: () async {
+                          Navigator.of(contextoPantalla).pop();
+                          await abrirArchivo(archivo);
                         },
                       ),
-                    ),
-                  ],
+                    );
+                  },
                 ),
-              ),
-            );
-          },
-        );
-      },
+              );
+            },
+          );
+        },
+      ),
     );
   }
 
@@ -711,13 +685,13 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                       Icons.chevron_right,
                     ),
                     onTap: () {
-                      mostrarMensaje('Presionaste Recientes');
-
                       mostrarLista(
+                        contextoNavegacion: context,
                         titulo: 'Archivos recientes',
                         mostrarFavoritos: false,
                       );
                     },
+                  ),
                 ),
 
                 // FAVORITOS
@@ -735,6 +709,7 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
                       Icons.chevron_right,
                     ),
                     onTap: () => mostrarLista(
+                      contextoNavegacion: context,
                       titulo: 'Archivos favoritos',
                       mostrarFavoritos: true,
                     ),
@@ -1010,3 +985,4 @@ class _GestorArchivosAppState extends State<GestorArchivosApp> {
     );
   }
 }
+
